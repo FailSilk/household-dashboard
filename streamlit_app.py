@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import ssl
 import time
@@ -109,13 +110,20 @@ def dashboard():
         edit = view(assets=release["assets"], data=release["data"], state=state, version=revision,
                     ack=last.get("id"), conflict=last.get("conflict", False), key=f"dashboard_{digest}", default=None)
         if edit and edit.get("id") != last.get("id"):
-            with connect() as db:
-                result = db.execute("SELECT dashboard_save(%s, %s, %s, %s)",
-                                    (viewer, edit["version"], edit["id"], Jsonb(edit["state"]))).fetchone()[0]
-            st.session_state.last_edit = {"id": edit["id"], "conflict": result == "conflict"}
+            try:
+                with connect() as db:
+                    result = db.execute("SELECT dashboard_save(%s, %s, %s, %s)",
+                                        (viewer, edit["version"], edit["id"], Jsonb(edit["state"]))).fetchone()[0]
+            except psycopg.DataError as error:
+                # Acknowledge rejected writes so the component releases its pending edit.
+                # Log the SQLSTATE only. Submitted records can include private user data.
+                logging.getLogger(__name__).warning("Dashboard edit rejected (SQLSTATE %s)", error.sqlstate)
+                result = "rejected"
+            st.session_state.last_edit = {"id": edit["id"], "conflict": result == "conflict",
+                                          "rejected": result == "rejected"}
             st.rerun()
-    except psycopg.DataError:
-        st.error("This edit could not be saved. Reload to see the saved version.")
+        if last.get("rejected"):
+            st.error("Your last change could not be saved. Your saved dashboard is open. You can try again.")
     except (psycopg.Error, IndexError, KeyError, TypeError):
         st.warning("Connecting to your dashboard. This page will retry automatically.")
 
