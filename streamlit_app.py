@@ -42,10 +42,13 @@ def connect():
                            connect_timeout=10, prepare_threshold=None)
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_release():
+@st.cache_data(max_entries=2, show_spinner=False)
+def load_release(digest):
     with connect() as db:
-        return json.loads(db.execute("SELECT body FROM dashboard_release WHERE id = 1").fetchone()[0])
+        row = db.execute("SELECT body FROM dashboard_release WHERE id = 1 AND digest = %s", (digest,)).fetchone()
+        if row is None:
+            st.rerun()
+        return json.loads(row[0])
 
 
 def authenticate():
@@ -96,12 +99,15 @@ def dashboard():
     if verified_user(st.session_state.get("access_token"), signing_key, accounts) != viewer:
         st.rerun()
     try:
-        release = load_release()
         with connect() as db:
-            revision, state = db.execute("SELECT * FROM dashboard_read(%s)", (viewer,)).fetchone()
+            revision, state, digest = db.execute(
+                """SELECT household.revision, household.state, release.digest
+                   FROM dashboard_read(%s) AS household CROSS JOIN dashboard_release AS release
+                   WHERE release.id = 1""", (viewer,)).fetchone()
+        release = load_release(digest)
         last = st.session_state.get("last_edit", {})
         edit = view(assets=release["assets"], data=release["data"], state=state, version=revision,
-                    ack=last.get("id"), conflict=last.get("conflict", False), key="dashboard", default=None)
+                    ack=last.get("id"), conflict=last.get("conflict", False), key=f"dashboard_{digest}", default=None)
         if edit and edit.get("id") != last.get("id"):
             with connect() as db:
                 result = db.execute("SELECT dashboard_save(%s, %s, %s, %s)",
