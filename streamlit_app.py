@@ -54,7 +54,7 @@ def authenticate():
         if not passwords or not all(isinstance(p, str) and 16 <= len(p.encode()) <= 72 for p in passwords.values()):
             raise ValueError("Incomplete configuration")
     except (KeyError, ValueError, FileNotFoundError):
-        st.title("Sign in")
+        st.title("Sign In")
         st.info("Sign-in is temporarily unavailable.")
         st.stop()
     key = hashlib.sha256(b"household-dashboard/session/v2\0" + json.dumps(passwords, sort_keys=True).encode()).digest()
@@ -68,10 +68,10 @@ def authenticate():
         st.session_state.access_token = token
         return viewer, key, tuple(passwords)
     with st.form("access", clear_on_submit=True):
-        st.subheader("Household sign-in")
+        st.subheader("Household Sign-In")
         username = st.text_input("Username", autocomplete="username").strip().lower()
         password = st.text_input("Password", type="password", autocomplete="current-password")
-        submitted = st.form_submit_button("Sign in")
+        submitted = st.form_submit_button("Sign In")
     if submitted:
         matches = hmac.compare_digest(hashlib.sha256(password.encode()).digest(),
                                       hashlib.sha256(passwords.get(username, "").encode()).digest())
@@ -115,4 +115,4 @@ def dashboard():
 
 
 dashboard()
-st.button("Sign out", on_click=save_session, args=(None,))
+st.button("Sign Out", on_click=save_session, args=(None,))
