@@ -1,0 +1,13 @@
+[client]
+showErrorDetails = "none"
+toolbarMode = "minimal"
+
+[server]
+enableStaticServing = false
+
+[theme]
+base = "light"
+primaryColor = "#184432"
+backgroundColor = "#fbfaf6"
+secondaryBackgroundColor = "#e9efe6"
+textColor = "#1c3027"
