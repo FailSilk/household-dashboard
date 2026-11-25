@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Session</title></head><body><script>
+"use strict";
+const parentOrigin = new URL(document.referrer || location.href).origin;
+function send(type, fields) {
+  window.parent.postMessage({isStreamlitMessage: true, type, ...fields}, parentOrigin);
+}
+let previous;
+window.addEventListener("message", event => {
+  if (event.source !== window.parent || event.origin !== parentOrigin || event.data?.type !== "streamlit:render") return;
+  const {command, token} = event.data.args;
+  if (!command || command.id === previous) return;
+  previous = command.id;
+  const key = "dashboard.session.v2";
+  let saved = null;
+  try {
+    if (command.op === "store") localStorage.setItem(key, token);
+    if (command.op === "clear") localStorage.removeItem(key);
+    if (command.op === "read") saved = localStorage.getItem(key);
+  } catch { /* A browser that disables storage can still use its current session. */ }
+  send("streamlit:setFrameHeight", {height: 0});
+  send("streamlit:setComponentValue", {dataType: "json", value: {id: command.id, token: saved}});
+});
+send("streamlit:componentReady", {apiVersion: 1});
+</script></body></html>

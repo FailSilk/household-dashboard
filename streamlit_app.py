@@ -1,25 +1,39 @@
 """Authenticate before opening any connection to the private dashboard."""
 import hashlib
+import hmac
 import json
+import secrets
 import ssl
+import time
 from pathlib import Path
 
-import bcrypt
+import jwt
 import psycopg
 from psycopg.types.json import Jsonb
 import streamlit as st
 import streamlit.components.v1 as components
-import streamlit_authenticator as stauth
 
 st.set_page_config(page_title="Household dashboard", layout="wide", initial_sidebar_state="collapsed")
 
 
-@st.cache_data(show_spinner=False)
-def login_config(passwords):
-    users = {name: {"name": name, "password": bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()}
-             for name, password in passwords.items()}
-    key = hashlib.sha256(b"household-dashboard/session/v1\0" + json.dumps(passwords, sort_keys=True).encode()).hexdigest()
-    return users, key
+remember = components.declare_component("browser_session", path=str(Path(__file__).parent / "session"))
+
+
+def save_session(token):
+    st.session_state.access_token = token
+    st.session_state.browser_command = {"id": secrets.token_hex(12), "op": "store" if token else "clear"}
+    st.session_state.pop("last_edit", None)
+
+
+def verified_user(token, key, accounts):
+    if not isinstance(token, str) or len(token) > 2048:
+        return None
+    try:
+        claims = jwt.decode(token, key, algorithms=["HS256"], audience="household-dashboard",
+                            options={"require": ["exp", "iat", "sub", "aud"]})
+    except jwt.InvalidTokenError:
+        return None
+    return claims["sub"] if claims["sub"] in accounts else None
 
 
 def connect():
@@ -39,23 +53,39 @@ def authenticate():
         passwords = dict(st.secrets["accounts"])
         if not passwords or not all(isinstance(p, str) and 16 <= len(p.encode()) <= 72 for p in passwords.values()):
             raise ValueError("Incomplete configuration")
-        users, signing_key = login_config(passwords)
     except (KeyError, ValueError, FileNotFoundError):
         st.title("Sign in")
         st.info("Sign-in is temporarily unavailable.")
         st.stop()
-    auth = stauth.Authenticate({"usernames": users}, "household_session", signing_key,
-                               cookie_expiry_days=30, auto_hash=False)
-    auth.login(fields={"Form name": "Household sign-in", "Login": "Sign in"}, clear_on_submit=True)
-    viewer = st.session_state.get("username")
-    if st.session_state.get("authentication_status") is not True or viewer not in users:
-        if st.session_state.get("authentication_status") is False:
-            st.error("Check your username and password and try again.")
-        st.stop()
-    return viewer, auth
+    key = hashlib.sha256(b"household-dashboard/session/v2\0" + json.dumps(passwords, sort_keys=True).encode()).digest()
+    cmd = st.session_state.get("browser_command", {"op": "read", "id": "initial"})
+    token = st.session_state.get("access_token")
+    reply = remember(command=cmd, token=token if cmd["op"] == "store" else None, key="session", default=None)
+    if cmd["op"] == "read" and isinstance(reply, dict) and reply.get("id") == cmd["id"]:
+        token = reply.get("token")
+    viewer = verified_user(token, key, passwords)
+    if viewer:
+        st.session_state.access_token = token
+        return viewer, key, tuple(passwords)
+    with st.form("access", clear_on_submit=True):
+        st.subheader("Household sign-in")
+        username = st.text_input("Username", autocomplete="username").strip().lower()
+        password = st.text_input("Password", type="password", autocomplete="current-password")
+        submitted = st.form_submit_button("Sign in")
+    if submitted:
+        matches = hmac.compare_digest(hashlib.sha256(password.encode()).digest(),
+                                      hashlib.sha256(passwords.get(username, "").encode()).digest())
+        if matches and username in passwords:
+            now = int(time.time())
+            save_session(jwt.encode({"sub": username, "aud": "household-dashboard", "iat": now,
+                                     "exp": now + 30 * 86400}, key, algorithm="HS256"))
+            st.rerun()
+        time.sleep(0.4)
+        st.error("Check your username and password and try again.")
+    st.stop()
 
 
-viewer, auth = authenticate()
+viewer, signing_key, accounts = authenticate()
 st.markdown("""<style>[data-testid="stMainBlockContainer"]{max-width:1200px;padding:.3rem .5rem 0}
     @media print{[data-testid="stHeader"]{display:none}}</style>""", unsafe_allow_html=True)
 view = components.declare_component("private_dashboard", path=str(Path(__file__).parent / "bridge"))
@@ -63,8 +93,8 @@ view = components.declare_component("private_dashboard", path=str(Path(__file__)
 
 @st.fragment(run_every=12)
 def dashboard():
-    if st.session_state.get("authentication_status") is not True or st.session_state.get("username") != viewer:
-        st.stop()
+    if verified_user(st.session_state.get("access_token"), signing_key, accounts) != viewer:
+        st.rerun()
     try:
         release = load_release()
         with connect() as db:
@@ -85,4 +115,4 @@ def dashboard():
 
 
 dashboard()
-auth.logout("Sign out")
+st.button("Sign out", on_click=save_session, args=(None,))
