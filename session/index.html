@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><title>Session</title></head><body><script>
 "use strict";
-const parentOrigin = new URL(document.referrer || location.href).origin;
+const parentOrigin = location.origin;
 function send(type, fields) {
   window.parent.postMessage({isStreamlitMessage: true, type, ...fields}, parentOrigin);
 }
